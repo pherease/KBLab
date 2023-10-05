@@ -23,6 +23,8 @@ class file{
     int n_segment;
     int n_pointsPerEvent;
 
+    double maxEDM = TIMESTEP*10;
+
     
     vector<double> time_code = {};
     vector<vector<double>> matrix; 
@@ -232,6 +234,10 @@ class file{
             }
         }
 
+        int GetNDataPoints(){
+            return n_pointsPerEvent;
+        }
+
         /// @brief Changes the time-step value. Default value is 2.5e-9.
         void ChangeTimeStep(double new_step){
             TIMESTEP = new_step;
@@ -323,24 +329,33 @@ class file{
         /// @brief Takes the matrix obtained by ReadFile() argument and applies Landau fit to each event in the matrix. Stores important variables like rise time, fall time, peak voltage etc. Get those results by using GetFitResults() method.
         void LandFit(){
             int ind = 0;
+
             for (vector<double> event: matrix){
-                TGraph *gr = new TGraph(n_dPoints, time_code.data(), event.data());
+                int nPoints_set = 150;
+                int nPointsNormalization = (n_pointsPerEvent - nPoints_set)/2;
+
+                vector<double> temp_time_code(time_code.begin() + nPointsNormalization, time_code.end() - nPointsNormalization);
+                vector<double> temp_event(event.begin() + nPointsNormalization, event.end() - nPointsNormalization);
+
+                TGraph *gr = new TGraph(nPoints_set, temp_time_code.data(), temp_event.data());
                 gr->SetTitle("");
 
-                TF1 *land_fit = new TF1 ("land_fit","[0]*TMath::Landau(x,[1],[2])", time_code[0], time_code.back()); 
+                TF1 *land_fit = new TF1 ("land_fit","([0]*TMath::Landau(x,[1],[2])) + [3]", temp_time_code[0], temp_time_code.back()); 
 
-                auto maxVoltIt = max_element(event.begin(), event.end());
+                auto maxVoltIt = max_element(temp_event.begin(), temp_event.end());
                 double maxVolt = *maxVoltIt;
-                int maxVoltInd = distance(event.begin(), maxVoltIt);
+                int maxVoltInd = distance(temp_event.begin(), maxVoltIt);
 
-                land_fit->SetParameters(maxVolt, maxVoltInd*TIMESTEP, TIMESTEP);
+                land_fit->SetParameters(maxVolt, (maxVoltInd + nPointsNormalization)*TIMESTEP, TIMESTEP, maxVolt/10.0);
 
-                TFitResultPtr fit_result = gr->Fit(land_fit, "Q");
+                TFitResultPtr fit_result = gr->Fit(land_fit, "ME");
                 fitPResVec.push_back(fit_result);
 
-                Int_t fitStatus = fit_result;
+                cerr << YELLOW << maxVolt <<  RESET << " - " << YELLOW << (maxVoltInd+nPointsNormalization)*TIMESTEP << RESET << endl;
 
-                if (!fit_result) {
+                cerr << GREEN << ind << RESET << ": " <<  RED << fit_result << RESET << endl;
+
+                if (fit_result!=4) {
                     n_succesfulFits += 1;
 
                     vector<double> peak = {land_fit->GetMaximumX(), land_fit->GetMaximum()};
@@ -348,14 +363,14 @@ class file{
                     double v_high = peak[1]*0.8;
                     double v_low = peak[1]*0.2;
 
-                    double rise_l = land_fit->GetX(v_low, time_code[0], peak[0]);
-                    double rise_h = land_fit->GetX(v_high, time_code[0], peak[0]);
-                    double fall_l = land_fit->GetX(v_low, peak[0], time_code.back());
-                    double fall_h = land_fit->GetX(v_high, peak[0], time_code.back());
+                    double rise_l = land_fit->GetX(v_low, temp_time_code[0], peak[0]);
+                    double rise_h = land_fit->GetX(v_high, temp_time_code[0], peak[0]);
+                    double fall_l = land_fit->GetX(v_low, peak[0], temp_time_code.back());
+                    double fall_h = land_fit->GetX(v_high, peak[0], temp_time_code.back());
 
                     double rise_t = rise_h - rise_l;
                     double fall_t = fall_l - fall_h;
-                    double auc = land_fit->Integral(0, time_code.back());
+                    double auc = land_fit->Integral(0, temp_time_code.back());
 
                     fit_output[0].push_back(rise_t);
                     fit_output[1].push_back(fall_t);
@@ -378,6 +393,9 @@ class file{
                 ind += 1;
                 delete gr;
                 delete land_fit;
+
+                temp_time_code = {};
+                temp_event = {};
             }
         }
         
@@ -399,7 +417,13 @@ class file{
             
             else {
                 vector<double> bounds;
+
+
+
                 for (int i = 0; i < fit_output.size(); i++){
+
+                    cerr << YELLOW << fit_output[i].size() << RESET << endl;
+
                     double d_min = *min_element(fit_output[i].begin(), fit_output[i].end());
                     double d_max = *max_element(fit_output[i].begin(), fit_output[i].end());
                     bounds.push_back(d_min);
@@ -430,7 +454,7 @@ class file{
             TGraph *gr_ = new TGraph();
             gr_ = &fitGraphs[i];
 
-            string title = "Event No: " + to_string(SuccFitsInd[i]);
+            string title = "Event No: " + to_string(i);
             string savePath = to_string(i) +".pdf";
             
             TCanvas *c = new TCanvas("c", title.c_str(), 1280, 1024);

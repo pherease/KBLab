@@ -1,7 +1,7 @@
 #include "include.h"
 
 int main(){
-    gErrorIgnoreLevel = 6001;
+    ///gErrorIgnoreLevel = 6001;
     while(true){
         string arg;
         string PATH;

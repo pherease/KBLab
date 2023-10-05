@@ -25,6 +25,7 @@
 #include <TH1F.h>
 #include <TError.h>
 #include <TTree.h>
+#include <TFitResult.h>
 #include <TFitResultPtr.h>
 #include <TFitter.h>
 // Namespaces
