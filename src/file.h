@@ -6,10 +6,12 @@ class file{
     string folderName;
     string outFolderDir;
     string outFileDir;
+    string SuccFolderDir;
     string unSuccFolderDir;
     int n_events;
     int n_dPoints;
     bool read_check = false;
+    string plot_opt;
 
     int n_succesfulFits = 0;
     string scintillator;
@@ -21,7 +23,8 @@ class file{
     double threshold;
     double samplingRate;
     int n_segment;
-    int n_pointsPerEvent;
+
+    double maxEDM = TIMESTEP*10;
 
     
     vector<double> time_code = {};
@@ -34,6 +37,7 @@ class file{
     vector<TGraph> fitGraphs;
     vector<TH1F*> histograms;
     vector<TFitResultPtr> fitPResVec = {};
+
     TTree* fTree = new TTree("fTree", "Metadata Tree");
 
     public:
@@ -93,7 +97,7 @@ class file{
                     }
                     else if(temp.find("Sample") != -1){
                         string temp_str = temp.substr(0, temp.size() - 6);
-                        n_pointsPerEvent = stoi(temp_str);
+                        n_dPoints = stoi(temp_str);
                     }
                     else {
                         set_no = stoi(temp);
@@ -232,9 +236,23 @@ class file{
             }
         }
 
+        int GetNDataPoints(){
+            return n_dPoints;
+        }
+
+        string GetPlotOpt(){
+            return plot_opt;
+            }
+
         /// @brief Changes the time-step value. Default value is 2.5e-9.
         void ChangeTimeStep(double new_step){
             TIMESTEP = new_step;
+        }
+        
+        void SetPlotOpt(string new_plot_opt){
+            if (GetPlotOpt() != new_plot_opt){
+                plot_opt = new_plot_opt;
+            }
         }
         
         bool IsValidType(){
@@ -323,24 +341,39 @@ class file{
         /// @brief Takes the matrix obtained by ReadFile() argument and applies Landau fit to each event in the matrix. Stores important variables like rise time, fall time, peak voltage etc. Get those results by using GetFitResults() method.
         void LandFit(){
             int ind = 0;
-            for (vector<double> event: matrix){
-                TGraph *gr = new TGraph(n_dPoints, time_code.data(), event.data());
-                gr->SetTitle("");
+            int fit_range = 128;
 
-                TF1 *land_fit = new TF1 ("land_fit","[0]*TMath::Landau(x,[1],[2])", time_code[0], time_code.back()); 
+            for (vector<double> event: matrix){
 
                 auto maxVoltIt = max_element(event.begin(), event.end());
                 double maxVolt = *maxVoltIt;
                 int maxVoltInd = distance(event.begin(), maxVoltIt);
 
+                int sInd = maxVoltInd - fit_range/2;
+                int fInd = maxVoltInd + fit_range/2;
+
+                vector<double> temp_time_code;
+                vector<double> temp_event;
+
+                temp_time_code.insert(temp_time_code.end(), time_code.begin() + sInd, time_code.begin() + fInd);
+                temp_event.insert(temp_event.end(), time_code.begin() + sInd, time_code.begin() + fInd);
+
+                std::copy(std::next(time_code.begin(), maxVoltInd - fit_range / 2), std::next(time_code.begin(), maxVoltInd + fit_range / 2), temp_time_code.begin());
+                std::copy(std::next(event.begin(), maxVoltInd - fit_range / 2), std::next(event.begin(), maxVoltInd + fit_range / 2), temp_event.begin());
+
+                TGraph *gr = new TGraph(temp_event.size(), temp_time_code.data(), temp_event.data());
+                gr->SetTitle("");
+
+                TF1 *land_fit = new TF1 ("land_fit","([0]*TMath::Landau(x,[1],[2]))", temp_time_code[0], temp_time_code.back()); 
+
                 land_fit->SetParameters(maxVolt, maxVoltInd*TIMESTEP, TIMESTEP);
+                land_fit->SetLineWidth(1);
+                land_fit->SetLineColorAlpha(kRed, 0.5);
 
                 TFitResultPtr fit_result = gr->Fit(land_fit, "Q");
                 fitPResVec.push_back(fit_result);
 
-                Int_t fitStatus = fit_result;
-
-                if (!fit_result) {
+                if (fit_result != 4) {
                     n_succesfulFits += 1;
 
                     vector<double> peak = {land_fit->GetMaximumX(), land_fit->GetMaximum()};
@@ -348,14 +381,14 @@ class file{
                     double v_high = peak[1]*0.8;
                     double v_low = peak[1]*0.2;
 
-                    double rise_l = land_fit->GetX(v_low, time_code[0], peak[0]);
-                    double rise_h = land_fit->GetX(v_high, time_code[0], peak[0]);
-                    double fall_l = land_fit->GetX(v_low, peak[0], time_code.back());
-                    double fall_h = land_fit->GetX(v_high, peak[0], time_code.back());
+                    double rise_l = land_fit->GetX(v_low, temp_time_code[0], peak[0]);
+                    double rise_h = land_fit->GetX(v_high, temp_time_code[0], peak[0]);
+                    double fall_l = land_fit->GetX(v_low, peak[0], temp_time_code.back());
+                    double fall_h = land_fit->GetX(v_high, peak[0], temp_time_code.back());
 
                     double rise_t = rise_h - rise_l;
                     double fall_t = fall_l - fall_h;
-                    double auc = land_fit->Integral(0, time_code.back());
+                    double auc = land_fit->Integral(temp_time_code[0], temp_time_code.back());
 
                     fit_output[0].push_back(rise_t);
                     fit_output[1].push_back(fall_t);
@@ -367,7 +400,6 @@ class file{
                     TGraph gr_temp = *gr;
                     fitGraphs.push_back(gr_temp);
                     SuccFitsGraphs.push_back(gr_temp);
-
                 }
                 else{
                     unSuccFitsInd.push_back(ind);
@@ -375,6 +407,7 @@ class file{
                     fitGraphs.push_back(gr_temp);
                     unSuccFitsGraphs.push_back(gr_temp);
                 }
+
                 ind += 1;
                 delete gr;
                 delete land_fit;
@@ -400,6 +433,7 @@ class file{
             else {
                 vector<double> bounds;
                 for (int i = 0; i < fit_output.size(); i++){
+
                     double d_min = *min_element(fit_output[i].begin(), fit_output[i].end());
                     double d_max = *max_element(fit_output[i].begin(), fit_output[i].end());
                     bounds.push_back(d_min);
@@ -430,57 +464,137 @@ class file{
             TGraph *gr_ = new TGraph();
             gr_ = &fitGraphs[i];
 
-            string title = "Event No: " + to_string(SuccFitsInd[i]);
-            string savePath = to_string(i) +".pdf";
+            string title = "Event No: " + to_string(i);
+            string savePath = to_string(i) + ".pdf";
             
-            TCanvas *c = new TCanvas("c", title.c_str(), 1280, 1024);
+            TCanvas *c = new TCanvas("c", title.c_str(), 640, 512);
             gr_->SetTitle(title.c_str());
             gr_->GetXaxis()->SetTitle("Time (s)");
             gr_->GetYaxis()->SetTitle("Voltage (V)");
-            gr_->Draw("");
+
+            gr_->SetMarkerStyle(20); 
+            gr_->SetMarkerSize(1);
+            gr_->SetMarkerColor(9); 
+            gr_->Draw("AP");
 
             TFitResultPtr temp_fitRes = fitPResVec[i];
-
-/*
-            double scale = temp_fitRes->GetParameter(0);
-            double mu = temp_fitRes->GetParameter(1);
-            double sigma = temp_fitRes->GetParameter(2);
-
-            cout << YELLOW << "Fit Index: "<< RESET << i << endl;
-            cout << YELLOW << "Scale Parameter: " << RESET << scale << endl;
-            cout << YELLOW << "Mu Parameter: " << RESET << mu << endl;
-            cout << YELLOW << "Sigma Parameter: " << RESET << sigma << endl;
-*/
             c->SaveAs(savePath.c_str());
 
             delete c;
+            delete gr_;
         }
 
-        void WriteOutUnSuccFits(){
+        void WriteOutGraphs(){
+            SuccFolderDir = outFileDir + "/SuccFits";
             unSuccFolderDir = outFileDir + "/unSuccFits";
+            if (GetPlotOpt() == "a"){
+                for (int i = 0; i < unSuccFitsGraphs.size(); i++){
+                    if (!fs::exists(unSuccFolderDir)) {
+                        fs::create_directories(unSuccFolderDir);
+                    }
+                    TGraph *gr_ = new TGraph();
+                    gr_ = &(unSuccFitsGraphs[i]);
 
-            for (int i = 0; i < unSuccFitsGraphs.size(); i++){
-                if (!fs::exists(unSuccFolderDir)) {
-                    fs::create_directories(unSuccFolderDir);
+                    string title = "Event No: " + to_string(unSuccFitsInd[i]);
+                    string savePath = unSuccFolderDir + "/" + to_string(unSuccFitsInd[i]) + ".pdf";
+                    
+                    TCanvas *c = new TCanvas("c", title.c_str(), 640, 512);
+                    gr_->SetTitle(title.c_str());
+                    gr_->GetXaxis()->SetTitle("Time (s)");
+                    gr_->GetYaxis()->SetTitle("Voltage (V)");
+                    gr_->SetMarkerStyle(20); 
+                    gr_->SetMarkerSize(1);
+                    gr_->SetMarkerColor(9); 
+                    gr_->Draw("AP");
+
+                    c->SaveAs(savePath.c_str());
+
+                    delete c;
+                    c = nullptr;
+                    delete gr_;
+                    gr_ = nullptr;
+                }               
+                for (int i = 0; i < SuccFitsGraphs.size(); i++){
+                    if (!fs::exists(SuccFolderDir)) {
+                        fs::create_directories(SuccFolderDir);
+                    }
+
+                    TGraph *gr_ = new TGraph();
+                    gr_ = &(SuccFitsGraphs[i]);
+
+                    string title = "Event No: " + to_string(SuccFitsInd[i]);
+                    string savePath = SuccFolderDir + "/" + to_string(SuccFitsInd[i]) + ".pdf";
+                    
+                    TCanvas *c = new TCanvas("c", title.c_str(), 640);
+                    gr_->SetTitle(title.c_str());
+                    gr_->GetXaxis()->SetTitle("Time (s)");
+                    gr_->GetYaxis()->SetTitle("Voltage (V)");
+                    gr_->SetMarkerStyle(20); 
+                    gr_->SetMarkerSize(1);
+                    gr_->SetMarkerColor(9); 
+                    gr_->Draw("AP");
+
+                    c->SaveAs(savePath.c_str());
+                    delete c;
+                    c = nullptr;
+                    delete gr_;
+                    gr_ = nullptr;
                 }
+            }
+            else if (GetPlotOpt() == "s"){
+                for (int i = 0; i < SuccFitsGraphs.size(); i++){
+                    if (!fs::exists(SuccFolderDir)) {
+                        fs::create_directories(SuccFolderDir);
+                    }
 
-                TGraph *gr_ = new TGraph();
-                gr_ = &(unSuccFitsGraphs[i]);
+                    TGraph *gr_ = new TGraph();
+                    gr_ = &(SuccFitsGraphs[i]);
 
-                string title = "Event No: " + to_string(unSuccFitsInd[i]);
-                string savePath = unSuccFolderDir + "/" + to_string(unSuccFitsInd[i]) + ".pdf";
-                
-                TCanvas *c = new TCanvas("c", title.c_str(), 1280, 1024);
-                gr_->SetTitle(title.c_str());
-                gr_->GetXaxis()->SetTitle("Time (s)");
-                gr_->GetYaxis()->SetTitle("Voltage (V)");
-                gr_->Draw("");
+                    string title = "Event No: " + to_string(SuccFitsInd[i]);
+                    string savePath = SuccFolderDir + "/" + to_string(SuccFitsInd[i]) + ".pdf";
+                    
+                    TCanvas *c = new TCanvas("c", title.c_str(), 640, 512);
+                    gr_->SetTitle(title.c_str());
+                    gr_->GetXaxis()->SetTitle("Time (s)");
+                    gr_->GetYaxis()->SetTitle("Voltage (V)");
+                    gr_->SetMarkerStyle(20); 
+                    gr_->SetMarkerSize(1);
+                    gr_->SetMarkerColor(9); 
+                    gr_->Draw("AP");
+
+                    c->SaveAs(savePath.c_str());
+
+                    delete c;
+                    delete gr_;
+                }
+            }
+            else if (GetPlotOpt() == "u"){
+                for (int i = 0; i < unSuccFitsGraphs.size(); i++){
+                    if (!fs::exists(unSuccFolderDir)) {
+                        fs::create_directories(unSuccFolderDir);
+                    }
+
+                    TGraph *gr_ = new TGraph();
+                    gr_ = &(unSuccFitsGraphs[i]);
+
+                    string title = "Event No: " + to_string(unSuccFitsInd[i]);
+                    string savePath = unSuccFolderDir + "/" + to_string(unSuccFitsInd[i]) + ".pdf";
+                    
+                    TCanvas *c = new TCanvas("c", title.c_str(), 640, 512);
+                    gr_->SetTitle(title.c_str());
+                    gr_->GetXaxis()->SetTitle("Time (s)");
+                    gr_->GetYaxis()->SetTitle("Voltage (V)");
+                    gr_->SetMarkerStyle(20); 
+                    gr_->SetMarkerSize(1);
+                    gr_->SetMarkerColor(9); 
+                    gr_->Draw("AP");
 
 
-                c->SaveAs(savePath.c_str());
+                    c->SaveAs(savePath.c_str());
 
-                delete c;
-
+                    delete c;
+                    delete gr_;
+                }                   
             }
         }
 
@@ -501,7 +615,7 @@ class file{
                 double temp_threshold;
                 double temp_samplingRate;
                 int temp_n_segment;
-                int temp_n_pointsPerEvent;
+                int temp_n_dPoints;
 
                 for (TH1F* hist: histograms){
                     hist->Write();
@@ -517,7 +631,7 @@ class file{
                 fTree->Branch("threshold", &temp_threshold);
                 fTree->Branch("samplingRate", &temp_samplingRate);
                 fTree->Branch("n_segment", &temp_n_segment);
-                fTree->Branch("n_pointsPerEvent", &temp_n_pointsPerEvent);
+                fTree->Branch("n_dPoints", &temp_n_dPoints);
 
                 temp_n_succesfulFits = n_succesfulFits;
                 temp_scintillator = scintillator;
@@ -529,13 +643,13 @@ class file{
                 temp_threshold = threshold;
                 temp_samplingRate = samplingRate;
                 temp_n_segment = n_segment;
-                temp_n_pointsPerEvent = n_pointsPerEvent;
+                temp_n_dPoints = n_dPoints;
                 
                 fTree->Fill();
                 fTree->Write();
                 outFile->Close();
 
-                WriteOutUnSuccFits();
+                WriteOutGraphs();
             }
         }
 };

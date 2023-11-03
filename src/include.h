@@ -25,8 +25,10 @@
 #include <TH1F.h>
 #include <TError.h>
 #include <TTree.h>
+#include <TFitResult.h>
 #include <TFitResultPtr.h>
 #include <TFitter.h>
+#include "Math/Minimizer.h"
 // Namespaces
 
 namespace fs = std::filesystem;
